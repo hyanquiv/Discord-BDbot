@@ -109,10 +109,17 @@ async def fetch_birthday_gif() -> str | None:
                 items = result.get("data", {}).get("data", [])
 
                 if not items:
+                    print("⚠️  KLIPY: No devolvió gifs")
                     return None
 
                 item = random.choice(items)
-                return item["file"]["hd"]["gif"]["url"]
+
+                gif_url = item.get("file", {}).get("hd", {}).get("gif", {}).get("url")
+                if not gif_url:
+                    print("⚠️  KLIPY: respuesta sin URL válida")
+                    return None
+
+                return gif_url
 
     except Exception as e:
         print(f"⚠️  KLIPY error: {e}")
@@ -121,19 +128,26 @@ async def fetch_birthday_gif() -> str | None:
 
 # ── Helper: enviar aviso de cumpleaños ───────────────────────────────────────
 async def send_birthday_message(channel: discord.TextChannel, member: discord.Member):
-    gif_url = await fetch_birthday_gif()
-    mensaje = random.choice(BIRTHDAY_MESSAGES).format(usuario=member.mention)
+    try:
+        gif_url = await fetch_birthday_gif()
+        mensaje = random.choice(BIRTHDAY_MESSAGES).format(usuario=member.mention)
 
-    embed = discord.Embed(
-        description=mensaje,
-        color=discord.Color.from_str("#ff6eb4")
-    )
-    embed.set_footer(text="🎂 Birthday Bot")
+        embed = discord.Embed(
+            description=mensaje,
+            color=discord.Color(0xff6eb4)
+        )
+        embed.set_footer(text="🎂 Birthday Bot")
 
-    if gif_url:
-        embed.set_image(url=gif_url)
+        if gif_url:
+            embed.set_image(url=gif_url)
 
-    await channel.send(content="@everyone", embed=embed)
+        await channel.send("@everyone", embed=embed)
+
+        print(f"✅ Mensaje enviado en #{channel.name} para {member}")
+
+    except Exception as e:
+        print("❌ ERROR enviando mensaje de cumpleaños:", e)
+        await channel.send(f"@everyone 🎂 Feliz cumple {member.mention} (fallback)")
 
 
 # ── Tarea diaria ─────────────────────────────────────────────────────────────
@@ -326,7 +340,7 @@ async def slash_list_birthdays(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🎉 Cumpleaños del servidor",
         description="\n".join(lines),
-        color=discord.Color.from_str("#ff6eb4")
+        color=discord.Color(0xff6eb4)
     )
     embed.set_footer(text=f"Total: {len(entries)} cumpleaños guardados")
 
@@ -387,7 +401,7 @@ async def slash_upcoming(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📅 Próximos cumpleaños",
         description="\n".join(lines),
-        color=discord.Color.from_str("#ffa500")
+        color=discord.Color(0xffa500)
     )
 
     await interaction.response.send_message(embed=embed)
@@ -441,6 +455,11 @@ async def on_ready():
     print(f"🎬 KLIPY GIFs: {'activado' if KLIPY_KEY else 'desactivado (sin API key)'}")
 
     check_birthdays.start()
+
+
+@client.event
+async def on_error(event, *args, **kwargs):
+    print("❌ ERROR EVENT:", event, args, kwargs)
 
 
 client.run(TOKEN)
