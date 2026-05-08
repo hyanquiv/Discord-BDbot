@@ -1,0 +1,19 @@
+version: "3.9"
+
+services:
+  birthday-bot:
+    build: .
+    image: birthday-bot:latest
+    container_name: birthday-bot
+    restart: unless-stopped
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - KLIPY_API_KEY=${KLIPY_API_KEY}
+      - TIMEZONE=America/Lima
+      - CHECK_HOUR=8
+      - DATA_FILE=/data/birthdays.json
+    volumes:
+      - birthday_data:/data
+
+volumes:
+  birthday_data:
