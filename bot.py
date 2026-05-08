@@ -84,16 +84,11 @@ async def fetch_birthday_gif() -> str | None:
                     return None
                 result = await resp.json()
                 # KLIPY devuelve data.data[] con media.gif.url o similar
-                items = result.get("data", {}).get("data", []) or result.get("data", [])
+                items = result.get("data", {}).get("data", [])
                 if not items:
                     return None
                 item = random.choice(items)
-                # Intentar distintos paths de respuesta
-                gif_url = (
-                    item.get("media", {}).get("gif", {}).get("url")
-                    or item.get("media_formats", {}).get("gif", {}).get("url")
-                    or item.get("url")
-                )
+                return item["file"]["hd"]["gif"]["url"]
                 return gif_url
     except Exception as e:
         print(f"⚠️  KLIPY error: {e}")
