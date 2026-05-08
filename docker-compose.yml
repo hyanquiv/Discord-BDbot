@@ -7,8 +7,9 @@ services:
     environment:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
       - KLIPY_API_KEY=${KLIPY_API_KEY}
-      - TIMEZONE=America/Lima
-      - CHECK_HOUR=8
+      - TIMEZONE=${TIMEZONE:-America/Lima}
+      - CHECK_HOUR=${CHECK_HOUR:-8}
+      - MENTION_EVERYONE=${MENTION_EVERYONE:-true}
       - DATA_FILE=/data/birthdays.json
     volumes:
       - birthday_data:/data

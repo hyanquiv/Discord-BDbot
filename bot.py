@@ -1,13 +1,22 @@
 import os
 import json
 import random
+import logging
+from datetime import datetime, timedelta
+
 import aiohttp
 import discord
 import pytz
-
-from datetime import datetime, timedelta
 from discord import app_commands
 from discord.ext import tasks
+
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] %(levelname)s: %(message)s",
+)
+log = logging.getLogger("birthday-bot")
 
 
 # ── Config ───────────────────────────────────────────────────────────────────
@@ -16,32 +25,43 @@ DATA_FILE = os.environ.get("DATA_FILE", "/data/birthdays.json")
 TIMEZONE = os.environ.get("TIMEZONE", "America/Lima")
 CHECK_HOUR = int(os.environ.get("CHECK_HOUR", "8"))
 KLIPY_KEY = os.environ.get("KLIPY_API_KEY", "")
+MENTION_EVERYONE = os.environ.get("MENTION_EVERYONE", "true").lower() == "true"
 
 
-# ── Mensajes aleatorios ───────────────────────────────────────────────────────
+# ── Colores ──────────────────────────────────────────────────────────────────
+COLOR_BIRTHDAY = discord.Color(0xFF6EB4)  # rosado
+COLOR_REMINDER = discord.Color(0xFFC107)  # amarillo
+COLOR_LIST = discord.Color(0x4CAF50)  # verde
+COLOR_UPCOMING = discord.Color(0x2196F3)  # azul
+COLOR_ERROR = discord.Color(0xF44336)  # rojo
+
+
+# ── Mensajes aleatorios (Español neutro) ─────────────────────────────────────
 BIRTHDAY_MESSAGES = [
-    "🎂 ¡Hoy es el cumpleaños de {usuario}! ¡Que la rompas! 🥳",
-    "🎉 ¡Feliz cumple {usuario}! Que este año venga cargado de cosas buenas 🙌",
-    "🥳 ¡{usuario} está de cumpleaños hoy! Alguien tráele una torta 🎂",
-    "🎈 ¡Ojo que hoy cumple {usuario}! Mándenle un saludo 👇",
-    "🎊 El universo decidió que hoy nació {usuario}. ¡Buena decisión, universo! 🌟",
-    "🍰 ¡{usuario} cumple un año más de experiencia! Happy birthday 🎉",
-    "🥂 ¡Brindemos por {usuario} que hoy está de cumple! 🎂🎊",
-    "🎸 ¡{usuario} cumple hoy! Que sea un día épico 🔥",
-    "✨ Hoy el servidor celebra a {usuario}. ¡Feliz cumple! 🎂",
-    "🎁 ¡Alguien dijo cumpleaños? Feliz cumple {usuario}! 🥳🎉",
+    "🎉 ¡Hoy celebramos el cumpleaños de {usuario}! ¡Que tengas un día increíble! 🎂",
+    "🥳 ¡Feliz cumpleaños {usuario}! Que este nuevo año esté lleno de salud y éxitos ✨",
+    "🎂 ¡Atención! Hoy es el cumpleaños de {usuario}. ¡A felicitar! 🎊",
+    "🎁 ¡{usuario} cumple años hoy! Que la pases genial y recibas muchos regalos 🎉",
+    "🎈 ¡Un año más para {usuario}! Que tengas un cumpleaños excelente 🥳",
+    "🍰 ¡Feliz cumpleaños {usuario}! Que nunca falte la torta y las buenas noticias 🎂",
+    "🎊 ¡Hoy es un día especial! {usuario} está de cumpleaños. ¡Muchas felicidades! ✨",
+    "🥂 ¡Brindemos por {usuario}! Que tengas un gran día y un año aún mejor 🎉",
+    "🎶 ¡Feliz cumpleaños {usuario}! Que tu día esté lleno de alegría y buenos momentos 🎂",
+    "🌟 Hoy el servidor está de fiesta: {usuario} cumple años. ¡Felicidades! 🎉",
+    "🎂 ¡Feliz cumpleaños {usuario}! Que todos tus objetivos se cumplan este año 💪✨",
+    "🎁 ¡Hoy celebramos a {usuario}! Que tu día sea tan genial como tú 🥳",
 ]
 
 REMINDER_MESSAGES = [
-    "🔔 Mañana es el cumpleaños de {usuario}. ¡Preparen los saludos! 🎂",
-    "📅 Ojo que mañana {usuario} cumple años. No se olviden 😉",
-    "⏰ Recordatorio: mañana es el cumple de {usuario}. A cargar las pilas 🎉",
-    "🗓️ Mañana {usuario} está de cumple. ¡Ya van avisados! 🥳",
-    "🎈 Pre-aviso: mañana cumple {usuario}. Vayan pensando el saludo 👀",
+    "🔔 Recordatorio: mañana es el cumpleaños de {usuario}. ¡No se olviden de felicitar! 🎂",
+    "📅 Atención: mañana {usuario} cumple años. ¡Prepárense para celebrarlo! 🎉",
+    "⏰ Mañana es el cumpleaños de {usuario}. ¡Dejen listo el saludo! 🥳",
+    "🎈 Aviso importante: mañana {usuario} está de cumpleaños. ¡A celebrar! 🎊",
+    "🎁 Mañana es el cumpleaños de {usuario}. ¡Que no se les pase! 🎂",
 ]
 
 
-# ── Client ───────────────────────────────────────────────────────────────────
+# ── Discord Client ───────────────────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.members = True
 
@@ -53,7 +73,7 @@ class BirthdayBot(discord.Client):
 
     async def setup_hook(self):
         await self.tree.sync()
-        print("✅ Slash commands sincronizados globalmente")
+        log.info("Slash commands sincronizados globalmente")
 
 
 client = BirthdayBot()
@@ -80,9 +100,44 @@ def get_guild_data(data: dict, guild_id: int) -> dict:
         data["guilds"] = {}
 
     if gid not in data["guilds"]:
-        data["guilds"][gid] = {"channel_id": None, "birthdays": {}}
+        data["guilds"][gid] = {
+            "channel_id": None,
+            "birthdays": {},
+            "last_announcement": {},
+        }
+
+    if "last_announcement" not in data["guilds"][gid]:
+        data["guilds"][gid]["last_announcement"] = {}
 
     return data["guilds"][gid]
+
+
+# ── Anti-spam ────────────────────────────────────────────────────────────────
+def already_announced(gdata: dict, user_id: str, kind: str, date_key: str) -> bool:
+    key = f"{kind}:{user_id}"
+    return gdata.get("last_announcement", {}).get(key) == date_key
+
+
+def mark_announced(gdata: dict, user_id: str, kind: str, date_key: str):
+    key = f"{kind}:{user_id}"
+    gdata["last_announcement"][key] = date_key
+
+
+# ── Canal válido ─────────────────────────────────────────────────────────────
+def find_valid_channel(guild: discord.Guild, channel_id: str | None):
+    if channel_id:
+        ch = guild.get_channel(int(channel_id))
+        if ch and isinstance(ch, discord.TextChannel):
+            perms = ch.permissions_for(guild.me)
+            if perms.send_messages and perms.embed_links:
+                return ch
+
+    for c in guild.text_channels:
+        perms = c.permissions_for(guild.me)
+        if perms.send_messages and perms.embed_links:
+            return c
+
+    return None
 
 
 # ── KLIPY GIF ────────────────────────────────────────────────────────────────
@@ -98,60 +153,63 @@ async def fetch_birthday_gif() -> str | None:
             async with session.get(
                 url,
                 params=params,
-                timeout=aiohttp.ClientTimeout(total=5)
+                timeout=aiohttp.ClientTimeout(total=5),
             ) as resp:
-
                 if resp.status != 200:
-                    print(f"⚠️  KLIPY HTTP {resp.status}")
+                    log.warning("KLIPY HTTP %s", resp.status)
                     return None
 
                 result = await resp.json()
                 items = result.get("data", {}).get("data", [])
-
                 if not items:
-                    print("⚠️  KLIPY: No devolvió gifs")
                     return None
 
                 item = random.choice(items)
-
-                gif_url = item.get("file", {}).get("hd", {}).get("gif", {}).get("url")
-                if not gif_url:
-                    print("⚠️  KLIPY: respuesta sin URL válida")
-                    return None
-
-                return gif_url
+                return item.get("file", {}).get("hd", {}).get("gif", {}).get("url")
 
     except Exception as e:
-        print(f"⚠️  KLIPY error: {e}")
+        log.warning("KLIPY error: %s", e)
         return None
 
 
-# ── Helper: enviar aviso de cumpleaños ───────────────────────────────────────
+# ── Mensajes ────────────────────────────────────────────────────────────────
 async def send_birthday_message(channel: discord.TextChannel, member: discord.Member):
-    try:
-        gif_url = await fetch_birthday_gif()
-        mensaje = random.choice(BIRTHDAY_MESSAGES).format(usuario=member.mention)
+    gif_url = await fetch_birthday_gif()
+    mensaje = random.choice(BIRTHDAY_MESSAGES).format(usuario=member.mention)
 
-        embed = discord.Embed(
-            description=mensaje,
-            color=discord.Color(0xff6eb4)
-        )
-        embed.set_footer(text="🎂 Birthday Bot")
+    embed = discord.Embed(
+        title="🎂 ¡Feliz cumpleaños!",
+        description=mensaje,
+        color=COLOR_BIRTHDAY,
+        timestamp=datetime.utcnow(),
+    )
+    embed.set_footer(text="🎉 Birthday Bot")
+    embed.set_thumbnail(url=member.display_avatar.url)
 
-        if gif_url:
-            embed.set_image(url=gif_url)
+    if gif_url:
+        embed.set_image(url=gif_url)
 
-        await channel.send("@everyone", embed=embed)
+    mention = "@everyone" if MENTION_EVERYONE else None
+    await channel.send(content=mention, embed=embed)
 
-        print(f"✅ Mensaje enviado en #{channel.name} para {member}")
 
-    except Exception as e:
-        print("❌ ERROR enviando mensaje de cumpleaños:", e)
-        await channel.send(f"@everyone 🎂 Feliz cumple {member.mention} (fallback)")
+async def send_reminder_message(channel: discord.TextChannel, member: discord.Member):
+    mensaje = random.choice(REMINDER_MESSAGES).format(usuario=member.mention)
+
+    embed = discord.Embed(
+        title="🔔 Recordatorio",
+        description=mensaje,
+        color=COLOR_REMINDER,
+        timestamp=datetime.utcnow(),
+    )
+    embed.set_footer(text="📅 Birthday Bot")
+    embed.set_thumbnail(url=member.display_avatar.url)
+
+    await channel.send(embed=embed)
 
 
 # ── Tarea diaria ─────────────────────────────────────────────────────────────
-@tasks.loop(hours=1)
+@tasks.loop(minutes=30)
 async def check_birthdays():
     tz = pytz.timezone(TIMEZONE)
     now = datetime.now(tz)
@@ -160,40 +218,51 @@ async def check_birthdays():
         return
 
     data = load_data()
-    today = (now.month, now.day)
 
+    today_key = now.strftime("%Y-%m-%d")
     tomorrow_dt = now + timedelta(days=1)
-    tmrw = (tomorrow_dt.month, tomorrow_dt.day)
+    tomorrow_key = tomorrow_dt.strftime("%Y-%m-%d")
+
+    today_md = (now.month, now.day)
+    tmrw_md = (tomorrow_dt.month, tomorrow_dt.day)
 
     for guild in client.guilds:
         gdata = get_guild_data(data, guild.id)
-        channel_id = gdata.get("channel_id")
-
-        channel = (
-            guild.get_channel(int(channel_id)) if channel_id
-            else next(
-                (c for c in guild.text_channels if c.permissions_for(guild.me).send_messages),
-                None
-            )
-        )
+        channel = find_valid_channel(guild, gdata.get("channel_id"))
 
         if not channel:
+            log.warning("No se encontró canal válido en %s", guild.name)
             continue
 
-        for user_id, info in gdata.get("birthdays", {}).items():
-            bday = datetime.strptime(info["date"], "%d/%m/%Y")
-            bday_md = (bday.month, bday.day)
+        birthdays = gdata.get("birthdays", {})
 
+        for user_id, info in birthdays.items():
             member = guild.get_member(int(user_id))
             if not member:
                 continue
 
-            if bday_md == today:
-                await send_birthday_message(channel, member)
+            bday = datetime.strptime(info["date"], "%d/%m/%Y")
+            bday_md = (bday.month, bday.day)
 
-            elif bday_md == tmrw:
-                mensaje = random.choice(REMINDER_MESSAGES).format(usuario=member.mention)
-                await channel.send(mensaje)
+            # HOY
+            if bday_md == today_md:
+                if already_announced(gdata, user_id, "birthday", today_key):
+                    continue
+
+                await send_birthday_message(channel, member)
+                mark_announced(gdata, user_id, "birthday", today_key)
+                save_data(data)
+                log.info("Cumple enviado para %s en %s", member, guild.name)
+
+            # MAÑANA
+            elif bday_md == tmrw_md:
+                if already_announced(gdata, user_id, "reminder", tomorrow_key):
+                    continue
+
+                await send_reminder_message(channel, member)
+                mark_announced(gdata, user_id, "reminder", tomorrow_key)
+                save_data(data)
+                log.info("Recordatorio enviado para %s en %s", member, guild.name)
 
 
 @check_birthdays.before_loop
@@ -201,32 +270,29 @@ async def before_check():
     await client.wait_until_ready()
 
 
-# ── /setcanal ────────────────────────────────────────────────────────────────
+# ── Slash Commands ──────────────────────────────────────────────────────────
 @client.tree.command(
     name="setcanal",
-    description="[Admin] Define el canal donde se anuncian los cumpleaños"
+    description="[Admin] Define el canal donde se anuncian los cumpleaños",
 )
 @app_commands.describe(canal="Canal de texto donde el bot mandará los avisos")
 @app_commands.default_permissions(administrator=True)
 async def slash_set_channel(interaction: discord.Interaction, canal: discord.TextChannel):
     data = load_data()
     gdata = get_guild_data(data, interaction.guild.id)
-
     gdata["channel_id"] = str(canal.id)
     save_data(data)
 
     await interaction.response.send_message(
-        f"✅ Canal de cumpleaños configurado: {canal.mention}",
-        ephemeral=True
+        f"✅ Canal configurado: {canal.mention}",
+        ephemeral=True,
     )
 
 
-# ── /cumple ──────────────────────────────────────────────────────────────────
 @client.tree.command(name="cumple", description="Guarda o actualiza tu fecha de cumpleaños")
-@app_commands.describe(fecha="Tu cumpleaños en formato DD/MM o DD/MM/AAAA → ej: 15/03")
+@app_commands.describe(fecha="Formato: DD/MM o DD/MM/AAAA → Ej: 15/03")
 async def slash_set_birthday(interaction: discord.Interaction, fecha: str):
     parsed = None
-
     for fmt in ("%d/%m/%Y", "%d/%m"):
         try:
             parsed = datetime.strptime(fecha.strip(), fmt)
@@ -236,8 +302,8 @@ async def slash_set_birthday(interaction: discord.Interaction, fecha: str):
 
     if not parsed:
         await interaction.response.send_message(
-            "❌ Formato inválido. Usá `DD/MM` o `DD/MM/AAAA`. Ej: `/cumple 15/03`",
-            ephemeral=True
+            "❌ Formato inválido. Usa `DD/MM` o `DD/MM/AAAA`. Ej: `/cumple 15/03`",
+            ephemeral=True,
         )
         return
 
@@ -252,68 +318,71 @@ async def slash_set_birthday(interaction: discord.Interaction, fecha: str):
     gdata["birthdays"][user_id] = {"date": normalized, "name": str(interaction.user)}
     save_data(data)
 
-    await interaction.response.send_message(
-        f"🎂 Cumpleaños {action}: **{normalized}** para {interaction.user.mention}",
-        ephemeral=True
+    embed = discord.Embed(
+        title="🎂 Cumpleaños guardado",
+        description=f"{interaction.user.mention}, tu cumpleaños fue {action}:\n📅 **{normalized}**",
+        color=COLOR_BIRTHDAY,
     )
 
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# ── /micumple ────────────────────────────────────────────────────────────────
+
 @client.tree.command(name="micumple", description="Muestra tu cumpleaños guardado")
 async def slash_my_birthday(interaction: discord.Interaction):
     data = load_data()
     gdata = get_guild_data(data, interaction.guild.id)
 
     user_id = str(interaction.user.id)
-
     if user_id not in gdata["birthdays"]:
         await interaction.response.send_message(
-            "No tenés ningún cumpleaños guardado. Usá `/cumple DD/MM`.",
-            ephemeral=True
+            "📭 No tienes ningún cumpleaños guardado. Usa `/cumple DD/MM`.",
+            ephemeral=True,
         )
         return
 
-    await interaction.response.send_message(
-        f"🎂 Tu cumpleaños guardado es: **{gdata['birthdays'][user_id]['date']}**",
-        ephemeral=True
+    date = gdata["birthdays"][user_id]["date"]
+    embed = discord.Embed(
+        title="🎂 Tu cumpleaños",
+        description=f"📅 Fecha guardada: **{date}**",
+        color=COLOR_BIRTHDAY,
     )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-# ── /borrarcumple ────────────────────────────────────────────────────────────
 @client.tree.command(name="borrarcumple", description="Elimina tu cumpleaños guardado")
 async def slash_delete_birthday(interaction: discord.Interaction):
     data = load_data()
     gdata = get_guild_data(data, interaction.guild.id)
-
     user_id = str(interaction.user.id)
 
     if user_id not in gdata["birthdays"]:
         await interaction.response.send_message(
-            "No tenés ningún cumpleaños guardado.",
-            ephemeral=True
+            "📭 No tienes ningún cumpleaños guardado.",
+            ephemeral=True,
         )
         return
 
     del gdata["birthdays"][user_id]
     save_data(data)
 
-    await interaction.response.send_message(
-        "🗑️ Tu cumpleaños fue eliminado.",
-        ephemeral=True
+    embed = discord.Embed(
+        title="🗑️ Cumpleaños eliminado",
+        description="Tu cumpleaños fue eliminado correctamente.",
+        color=COLOR_ERROR,
     )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-# ── /cumples ─────────────────────────────────────────────────────────────────
 @client.tree.command(name="cumples", description="Lista todos los cumpleaños del servidor")
 async def slash_list_birthdays(interaction: discord.Interaction):
     data = load_data()
     gdata = get_guild_data(data, interaction.guild.id)
-
     birthdays = gdata.get("birthdays", {})
+
     if not birthdays:
         await interaction.response.send_message(
             "📭 No hay cumpleaños guardados todavía.",
-            ephemeral=True
+            ephemeral=True,
         )
         return
 
@@ -323,44 +392,41 @@ async def slash_list_birthdays(interaction: discord.Interaction):
 
     entries = sorted(
         birthdays.items(),
-        key=lambda x: datetime.strptime(x[1]["date"], "%d/%m/%Y").strftime("%m%d")
+        key=lambda x: datetime.strptime(x[1]["date"], "%d/%m/%Y").strftime("%m%d"),
     )
 
     lines = []
-
     for uid, info in entries:
         member = interaction.guild.get_member(int(uid))
         name = member.display_name if member else info.get("name", f"Usuario {uid}")
 
         bday = datetime.strptime(info["date"], "%d/%m/%Y")
         emoji = "🎉" if (bday.month, bday.day) == today_md else "🎂"
-
         lines.append(f"{emoji} **{name}** — {info['date']}")
 
     embed = discord.Embed(
         title="🎉 Cumpleaños del servidor",
         description="\n".join(lines),
-        color=discord.Color(0xff6eb4)
+        color=COLOR_LIST,
     )
-    embed.set_footer(text=f"Total: {len(entries)} cumpleaños guardados")
+    embed.set_footer(text=f"Total: {len(entries)} cumpleaños registrados")
 
     await interaction.response.send_message(embed=embed)
 
 
-# ── /proximoscumples ─────────────────────────────────────────────────────────
 @client.tree.command(
     name="proximoscumples",
-    description="Muestra los próximos 5 cumpleaños del servidor"
+    description="Muestra los próximos 5 cumpleaños del servidor",
 )
 async def slash_upcoming(interaction: discord.Interaction):
     data = load_data()
     gdata = get_guild_data(data, interaction.guild.id)
-
     birthdays = gdata.get("birthdays", {})
+
     if not birthdays:
         await interaction.response.send_message(
             "📭 No hay cumpleaños guardados todavía.",
-            ephemeral=True
+            ephemeral=True,
         )
         return
 
@@ -370,47 +436,43 @@ async def slash_upcoming(interaction: discord.Interaction):
     def days_until(date_str: str) -> int:
         bday = datetime.strptime(date_str, "%d/%m/%Y")
         next_bday = bday.replace(year=now.year)
-
         if next_bday.date() < now.date():
             next_bday = next_bday.replace(year=now.year + 1)
-
         return (next_bday.date() - now.date()).days
 
     upcoming = sorted(
         birthdays.items(),
-        key=lambda x: days_until(x[1]["date"])
+        key=lambda x: days_until(x[1]["date"]),
     )[:5]
 
     lines = []
-
     for uid, info in upcoming:
         member = interaction.guild.get_member(int(uid))
         name = member.display_name if member else info.get("name", f"Usuario {uid}")
-
         days = days_until(info["date"])
 
         if days == 0:
-            label = "¡**HOY** 🎉!"
+            label = "HOY 🎉"
         elif days == 1:
-            label = "**mañana** 🔔"
+            label = "mañana 🔔"
         else:
-            label = f"en **{days} días**"
+            label = f"en {days} días"
 
-        lines.append(f"🎂 **{name}** — {info['date']} ({label})")
+        lines.append(f"🎂 **{name}** — {info['date']} (**{label}**)")
 
     embed = discord.Embed(
         title="📅 Próximos cumpleaños",
         description="\n".join(lines),
-        color=discord.Color(0xffa500)
+        color=COLOR_UPCOMING,
     )
+    embed.set_footer(text=f"Zona horaria: {TIMEZONE}")
 
     await interaction.response.send_message(embed=embed)
 
 
-# ── /testcumple (admin) ──────────────────────────────────────────────────────
 @client.tree.command(
     name="testcumple",
-    description="[Admin] Simula el aviso de cumpleaños para hoy"
+    description="[Admin] Simula el aviso de cumpleaños para hoy",
 )
 @app_commands.default_permissions(administrator=True)
 async def slash_test_birthday(interaction: discord.Interaction):
@@ -418,48 +480,42 @@ async def slash_test_birthday(interaction: discord.Interaction):
 
     tz = pytz.timezone(TIMEZONE)
     now = datetime.now(tz)
+    today_md = (now.month, now.day)
 
     data = load_data()
     gdata = get_guild_data(data, interaction.guild.id)
     birthdays = gdata.get("birthdays", {})
 
-    today_md = (now.month, now.day)
-    found = False
-
     channel_id = gdata.get("channel_id")
     channel = interaction.guild.get_channel(int(channel_id)) if channel_id else interaction.channel
 
+    if not channel:
+        await interaction.followup.send("❌ No se encontró un canal válido.", ephemeral=True)
+        return
+
+    found = False
     for user_id, info in birthdays.items():
         bday = datetime.strptime(info["date"], "%d/%m/%Y")
-
         if (bday.month, bday.day) == today_md:
             member = interaction.guild.get_member(int(user_id))
             if member:
                 await send_birthday_message(channel, member)
                 found = True
 
-    msg = (
-        "✅ Mensajes enviados."
-        if found
-        else "📭 No hay cumpleaños hoy. Guardá el tuyo con `/cumple` usando la fecha de hoy y probá de nuevo."
+    await interaction.followup.send(
+        "✅ Test completado. Mensaje enviado." if found else "📭 No hay cumpleaños hoy.",
+        ephemeral=True,
     )
-
-    await interaction.followup.send(msg, ephemeral=True)
 
 
 # ── Eventos ──────────────────────────────────────────────────────────────────
 @client.event
 async def on_ready():
-    print(f"✅ Conectado como {client.user} (ID: {client.user.id})")
-    print(f"⏰ Chequeo diario a las {CHECK_HOUR}:00 ({TIMEZONE})")
-    print(f"🎬 KLIPY GIFs: {'activado' if KLIPY_KEY else 'desactivado (sin API key)'}")
-
+    log.info("Conectado como %s (ID: %s)", client.user, client.user.id)
+    log.info("Chequeo diario a las %s:00 (%s)", CHECK_HOUR, TIMEZONE)
+    log.info("KLIPY GIFs: %s", "activado" if KLIPY_KEY else "desactivado")
+    log.info("Mention everyone: %s", "SI" if MENTION_EVERYONE else "NO")
     check_birthdays.start()
-
-
-@client.event
-async def on_error(event, *args, **kwargs):
-    print("❌ ERROR EVENT:", event, args, kwargs)
 
 
 client.run(TOKEN)
