@@ -300,6 +300,42 @@ async def on_check_error(error: Exception):
     log.error("Error en check_birthdays: %s", error, exc_info=True)
 
 
+class Paginator(discord.ui.View):
+    def __init__(self, pages: list[list[str]], color: discord.Color):
+        super().__init__(timeout=60)
+        self.pages = pages
+        self.color = color
+        self.current = 0
+        self._update_buttons()
+
+    def _update_buttons(self):
+        self.prev_btn.disabled = self.current == 0
+        self.next_btn.disabled = self.current >= len(self.pages) - 1
+
+    def make_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title="🎉 Cumpleaños del servidor",
+            description="\n".join(self.pages[self.current]),
+            color=self.color,
+        )
+        embed.set_footer(
+            text=f"Página {self.current + 1} de {len(self.pages)}"
+        )
+        return embed
+
+    @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary)
+    async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current -= 1
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+    @discord.ui.button(label="▶", style=discord.ButtonStyle.secondary)
+    async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current += 1
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+
 # ── Slash Commands ──────────────────────────────────────────────────────────
 @client.tree.command(
     name="setcanal",
@@ -308,6 +344,12 @@ async def on_check_error(error: Exception):
 @app_commands.describe(canal="Canal de texto donde el bot mandará los avisos")
 @app_commands.default_permissions(administrator=True)
 async def slash_set_channel(interaction: discord.Interaction, canal: discord.TextChannel):
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "❌ Este comando solo funciona dentro de un servidor.",
+            ephemeral=True,
+        )
+        return
     data = await load_data()
     gdata = get_guild_data(data, interaction.guild.id)
     gdata["channel_id"] = str(canal.id)
@@ -322,6 +364,12 @@ async def slash_set_channel(interaction: discord.Interaction, canal: discord.Tex
 @client.tree.command(name="cumple", description="Guarda o actualiza tu fecha de cumpleaños")
 @app_commands.describe(fecha="Formato: DD/MM o DD/MM/AAAA → Ej: 15/03")
 async def slash_set_birthday(interaction: discord.Interaction, fecha: str):
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "❌ Este comando solo funciona dentro de un servidor.",
+            ephemeral=True,
+        )
+        return
     parsed = None
     for fmt in ("%d/%m/%Y", "%d/%m"):
         try:
@@ -359,6 +407,12 @@ async def slash_set_birthday(interaction: discord.Interaction, fecha: str):
 
 @client.tree.command(name="micumple", description="Muestra tu cumpleaños guardado")
 async def slash_my_birthday(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "❌ Este comando solo funciona dentro de un servidor.",
+            ephemeral=True,
+        )
+        return
     data = await load_data()
     gdata = get_guild_data(data, interaction.guild.id)
 
@@ -381,6 +435,12 @@ async def slash_my_birthday(interaction: discord.Interaction):
 
 @client.tree.command(name="borrarcumple", description="Elimina tu cumpleaños guardado")
 async def slash_delete_birthday(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "❌ Este comando solo funciona dentro de un servidor.",
+            ephemeral=True,
+        )
+        return
     data = await load_data()
     gdata = get_guild_data(data, interaction.guild.id)
     user_id = str(interaction.user.id)
@@ -405,6 +465,12 @@ async def slash_delete_birthday(interaction: discord.Interaction):
 
 @client.tree.command(name="cumples", description="Lista todos los cumpleaños del servidor")
 async def slash_list_birthdays(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "❌ Este comando solo funciona dentro de un servidor.",
+            ephemeral=True,
+        )
+        return
     data = await load_data()
     gdata = get_guild_data(data, interaction.guild.id)
     birthdays = gdata.get("birthdays", {})
@@ -434,14 +500,14 @@ async def slash_list_birthdays(interaction: discord.Interaction):
         emoji = "🎉" if (bday.month, bday.day) == today_md else "🎂"
         lines.append(f"{emoji} **{name}** — {info['date']}")
 
-    embed = discord.Embed(
-        title="🎉 Cumpleaños del servidor",
-        description="\n".join(lines),
-        color=COLOR_LIST,
+    PAGE_SIZE = 10
+    pages = [lines[i : i + PAGE_SIZE] for i in range(0, len(lines), PAGE_SIZE)]
+    view = Paginator(pages, COLOR_LIST)
+    embed = view.make_embed()
+    embed.set_footer(
+        text=f"Total: {len(entries)} cumpleaños · Página 1 de {len(pages)}"
     )
-    embed.set_footer(text=f"Total: {len(entries)} cumpleaños registrados")
-
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, view=view)
 
 
 @client.tree.command(
@@ -449,6 +515,12 @@ async def slash_list_birthdays(interaction: discord.Interaction):
     description="Muestra los próximos 5 cumpleaños del servidor",
 )
 async def slash_upcoming(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "❌ Este comando solo funciona dentro de un servidor.",
+            ephemeral=True,
+        )
+        return
     data = await load_data()
     gdata = get_guild_data(data, interaction.guild.id)
     birthdays = gdata.get("birthdays", {})
@@ -506,6 +578,12 @@ async def slash_upcoming(interaction: discord.Interaction):
 )
 @app_commands.default_permissions(administrator=True)
 async def slash_test_birthday(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "❌ Este comando solo funciona dentro de un servidor.",
+            ephemeral=True,
+        )
+        return
     await interaction.response.defer(ephemeral=True)
 
     tz = pytz.timezone(TIMEZONE)
