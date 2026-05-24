@@ -201,7 +201,7 @@ async def send_birthday_message(channel: discord.TextChannel, member: discord.Me
         title="🎂 ¡Feliz cumpleaños!",
         description=mensaje,
         color=COLOR_BIRTHDAY,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(datetime.UTC),
     )
     embed.set_footer(text="🎉 Birthday Bot")
     embed.set_thumbnail(url=member.display_avatar.url)
@@ -220,7 +220,7 @@ async def send_reminder_message(channel: discord.TextChannel, member: discord.Me
         title="🔔 Recordatorio",
         description=mensaje,
         color=COLOR_REMINDER,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(datetime.UTC),
     )
     embed.set_footer(text="📅 Birthday Bot")
     embed.set_thumbnail(url=member.display_avatar.url)
