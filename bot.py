@@ -4,6 +4,7 @@ import random
 import logging
 import datetime as dt
 from datetime import datetime, timedelta
+from typing import Literal
 
 import aiofiles
 import aiohttp
@@ -612,6 +613,189 @@ async def slash_test_birthday(interaction: discord.Interaction):
 
     await interaction.followup.send(
         "✅ Test completado. Mensaje enviado." if found else "📭 No hay cumpleaños hoy.",
+        ephemeral=True,
+    )
+
+
+@client.tree.command(
+    name="cumpleadmin",
+    description="[Admin] Gestiona el cumpleaños de cualquier miembro",
+)
+@app_commands.describe(
+    accion="'set' para guardar, 'borrar' para eliminar",
+    usuario="Miembro del servidor",
+    fecha="DD/MM o DD/MM/AAAA (requerido si accion=set)",
+)
+@app_commands.default_permissions(administrator=True)
+async def slash_admin_birthday(
+    interaction: discord.Interaction,
+    accion: Literal["set", "borrar"],
+    usuario: discord.Member,
+    fecha: str = "",
+):
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "❌ Solo funciona en servidores.", ephemeral=True
+        )
+        return
+
+    data = await load_data()
+    gdata = get_guild_data(data, interaction.guild.id)
+    uid = str(usuario.id)
+
+    if accion == "borrar":
+        if uid not in gdata["birthdays"]:
+            await interaction.response.send_message(
+                f"📭 {usuario.mention} no tiene cumpleaños registrado.",
+                ephemeral=True,
+            )
+            return
+        del gdata["birthdays"][uid]
+        await save_data(data)
+        await interaction.response.send_message(
+            f"🗑️ Cumpleaños de {usuario.mention} eliminado.",
+            ephemeral=True,
+        )
+
+    elif accion == "set":
+        if not fecha:
+            await interaction.response.send_message(
+                "❌ Debes indicar la fecha cuando accion=set. Ej: `15/03`",
+                ephemeral=True,
+            )
+            return
+        parsed = None
+        for fmt in ("%d/%m/%Y", "%d/%m"):
+            try:
+                parsed = datetime.strptime(fecha.strip(), fmt)
+                break
+            except ValueError:
+                continue
+        if not parsed:
+            await interaction.response.send_message(
+                "❌ Formato inválido. Usa `DD/MM` o `DD/MM/AAAA`.",
+                ephemeral=True,
+            )
+            return
+        year = parsed.year if parsed.year != 1900 else 2000
+        normalized = parsed.replace(year=year).strftime("%d/%m/%Y")
+        gdata["birthdays"][uid] = {"date": normalized, "name": str(usuario)}
+        await save_data(data)
+        await interaction.response.send_message(
+            f"✅ Cumpleaños de {usuario.mention} guardado: **{normalized}**",
+            ephemeral=True,
+        )
+
+
+@client.tree.command(
+    name="estadisticas",
+    description="Muestra estadísticas de cumpleaños del servidor",
+)
+async def slash_stats(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "❌ Solo funciona en servidores.", ephemeral=True
+        )
+        return
+
+    data = await load_data()
+    gdata = get_guild_data(data, interaction.guild.id)
+    birthdays = gdata.get("birthdays", {})
+
+    if not birthdays:
+        await interaction.response.send_message(
+            "📭 No hay cumpleaños registrados.", ephemeral=True
+        )
+        return
+
+    tz = pytz.timezone(TIMEZONE)
+    now = datetime.now(tz)
+
+    months = [0] * 12
+    for info in birthdays.values():
+        try:
+            m = datetime.strptime(info["date"], "%d/%m/%Y").month
+            months[m - 1] += 1
+        except ValueError:
+            pass
+
+    mes_top_idx = months.index(max(months))
+    nombres_meses = [
+        "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+        "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+    ]
+
+    def days_until(date_str: str) -> int:
+        bday = datetime.strptime(date_str, "%d/%m/%Y")
+        next_bday = bday.replace(year=now.year)
+        if next_bday.date() < now.date():
+            next_bday = next_bday.replace(year=now.year + 1)
+        return (next_bday.date() - now.date()).days
+
+    proximo = min(birthdays.items(), key=lambda x: days_until(x[1]["date"]))
+    proximo_uid, proximo_info = proximo
+    proximo_member = interaction.guild.get_member(int(proximo_uid))
+    proximo_name = proximo_member.display_name if proximo_member else proximo_info.get("name", "Desconocido")
+    proximo_dias = days_until(proximo_info["date"])
+
+    embed = discord.Embed(
+        title="📊 Estadísticas de cumpleaños",
+        color=COLOR_LIST,
+    )
+    embed.add_field(name="Total registrados", value=f"**{len(birthdays)}** miembros", inline=True)
+    embed.add_field(
+        name="Mes más popular",
+        value=f"**{nombres_meses[mes_top_idx]}** ({months[mes_top_idx]} cumpleaños)",
+        inline=True,
+    )
+    if proximo_dias == 0:
+        label = "¡HOY! 🎉"
+    elif proximo_dias == 1:
+        label = "mañana 🔔"
+    else:
+        label = f"en {proximo_dias} días"
+    embed.add_field(
+        name="Próximo cumpleaños",
+        value=f"**{proximo_name}** — {proximo_info['date']} ({label})",
+        inline=False,
+    )
+    embed.set_footer(text=f"Zona horaria: {TIMEZONE}")
+    await interaction.response.send_message(embed=embed)
+
+
+@client.tree.command(
+    name="limpiar",
+    description="[Admin] Elimina cumpleaños de miembros que ya no están en el servidor",
+)
+@app_commands.default_permissions(administrator=True)
+async def slash_cleanup(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "❌ Solo funciona en servidores.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    data = await load_data()
+    gdata = get_guild_data(data, interaction.guild.id)
+    birthdays = gdata.get("birthdays", {})
+
+    to_remove = [
+        uid for uid in birthdays
+        if not interaction.guild.get_member(int(uid))
+    ]
+
+    for uid in to_remove:
+        del gdata["birthdays"][uid]
+
+    if to_remove:
+        await save_data(data)
+
+    await interaction.followup.send(
+        f"🧹 Limpieza completada. Se eliminaron **{len(to_remove)}** registros de miembros que ya no están en el servidor."
+        if to_remove
+        else "✅ No hay registros huérfanos. Todo está limpio.",
         ephemeral=True,
     )
 
