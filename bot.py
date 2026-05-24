@@ -2,6 +2,7 @@ import os
 import json
 import random
 import logging
+import datetime as dt
 from datetime import datetime, timedelta
 
 import aiofiles
@@ -71,10 +72,20 @@ class BirthdayBot(discord.Client):
     def __init__(self):
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
+        self.session: aiohttp.ClientSession | None = None
 
     async def setup_hook(self):
-        await self.tree.sync()
-        log.info("Slash commands sincronizados globalmente")
+        if os.environ.get("SYNC_COMMANDS") == "1":
+            await self.tree.sync()
+            log.info("Slash commands sincronizados globalmente")
+        else:
+            log.info("Slash commands: usando caché (define SYNC_COMMANDS=1 para forzar sync)")
+        self.session = aiohttp.ClientSession()
+
+    async def close(self):
+        if self.session:
+            await self.session.close()
+        await super().close()
 
 
 client = BirthdayBot()
@@ -156,23 +167,24 @@ async def fetch_birthday_gif() -> str | None:
         url = f"https://api.klipy.com/api/v1/{KLIPY_KEY}/gifs/search"
         params = {"q": "happy birthday", "limit": 20}
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url,
-                params=params,
-                timeout=aiohttp.ClientTimeout(total=5),
-            ) as resp:
-                if resp.status != 200:
-                    log.warning("KLIPY HTTP %s", resp.status)
-                    return None
+        if not client.session:
+            return None
+        async with client.session.get(
+            url,
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=5),
+        ) as resp:
+            if resp.status != 200:
+                log.warning("KLIPY HTTP %s", resp.status)
+                return None
 
-                result = await resp.json()
-                items = result.get("data", {}).get("data", [])
-                if not items:
-                    return None
+            result = await resp.json()
+            items = result.get("data", {}).get("data", [])
+            if not items:
+                return None
 
-                item = random.choice(items)
-                return item.get("file", {}).get("hd", {}).get("gif", {}).get("url")
+            item = random.choice(items)
+            return item.get("file", {}).get("hd", {}).get("gif", {}).get("url")
 
     except Exception as e:
         log.warning("KLIPY error: %s", e)
@@ -216,24 +228,28 @@ async def send_reminder_message(channel: discord.TextChannel, member: discord.Me
 
 
 # ── Tarea diaria ─────────────────────────────────────────────────────────────
-@tasks.loop(minutes=30)
+@tasks.loop(
+    time=dt.time(
+        hour=CHECK_HOUR,
+        minute=0,
+        tzinfo=pytz.timezone(TIMEZONE),
+    )
+)
 async def check_birthdays():
     tz = pytz.timezone(TIMEZONE)
     now = datetime.now(tz)
 
-    if now.hour != CHECK_HOUR:
-        return
+    try:
+        data = await load_data()
 
-    data = await load_data()
+        today_key = now.strftime("%Y-%m-%d")
+        tomorrow_dt = now + timedelta(days=1)
+        tomorrow_key = tomorrow_dt.strftime("%Y-%m-%d")
 
-    today_key = now.strftime("%Y-%m-%d")
-    tomorrow_dt = now + timedelta(days=1)
-    tomorrow_key = tomorrow_dt.strftime("%Y-%m-%d")
+        today_md = (now.month, now.day)
+        tmrw_md = (tomorrow_dt.month, tomorrow_dt.day)
 
-    today_md = (now.month, now.day)
-    tmrw_md = (tomorrow_dt.month, tomorrow_dt.day)
-
-    for guild in client.guilds:
+        for guild in client.guilds:
         gdata = get_guild_data(data, guild.id)
         channel = find_valid_channel(guild, gdata.get("channel_id"))
 
@@ -270,11 +286,18 @@ async def check_birthdays():
                 mark_announced(gdata, user_id, "reminder", tomorrow_key)
                 await save_data(data)
                 log.info("Recordatorio enviado para %s en %s", member, guild.name)
+    except Exception as e:
+        log.error("check_birthdays falló: %s", e, exc_info=True)
 
 
 @check_birthdays.before_loop
 async def before_check():
     await client.wait_until_ready()
+
+
+@check_birthdays.error
+async def on_check_error(error: Exception):
+    log.error("Error en check_birthdays: %s", error, exc_info=True)
 
 
 # ── Slash Commands ──────────────────────────────────────────────────────────
@@ -519,7 +542,7 @@ async def slash_test_birthday(interaction: discord.Interaction):
 @client.event
 async def on_ready():
     log.info("Conectado como %s (ID: %s)", client.user, client.user.id)
-    log.info("Chequeo diario a las %s:00 (%s)", CHECK_HOUR, TIMEZONE)
+    log.info("Chequeo diario a las %02d:00 (%s)", CHECK_HOUR, TIMEZONE)
     log.info("KLIPY GIFs: %s", "activado" if KLIPY_KEY else "desactivado")
     log.info("Mention everyone: %s", "SI" if MENTION_EVERYONE else "NO")
     check_birthdays.start()
