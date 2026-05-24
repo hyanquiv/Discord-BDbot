@@ -4,6 +4,7 @@ import random
 import logging
 from datetime import datetime, timedelta
 
+import aiofiles
 import aiohttp
 import discord
 import pytz
@@ -80,17 +81,23 @@ client = BirthdayBot()
 
 
 # ── Persistencia ─────────────────────────────────────────────────────────────
-def load_data() -> dict:
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+async def load_data() -> dict:
+    if not os.path.exists(DATA_FILE):
+        return {}
+    async with aiofiles.open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.loads(await f.read())
 
 
-def save_data(data: dict):
+async def save_data(data: dict):
     os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    tmp = DATA_FILE + ".tmp"
+    try:
+        async with aiofiles.open(tmp, "w", encoding="utf-8") as f:
+            await f.write(json.dumps(data, indent=2, ensure_ascii=False))
+        os.replace(tmp, DATA_FILE)
+    except Exception as e:
+        log.error("Error al guardar datos: %s", e, exc_info=True)
+        raise
 
 
 def get_guild_data(data: dict, guild_id: int) -> dict:
@@ -217,7 +224,7 @@ async def check_birthdays():
     if now.hour != CHECK_HOUR:
         return
 
-    data = load_data()
+    data = await load_data()
 
     today_key = now.strftime("%Y-%m-%d")
     tomorrow_dt = now + timedelta(days=1)
@@ -251,7 +258,7 @@ async def check_birthdays():
 
                 await send_birthday_message(channel, member)
                 mark_announced(gdata, user_id, "birthday", today_key)
-                save_data(data)
+                await save_data(data)
                 log.info("Cumple enviado para %s en %s", member, guild.name)
 
             # MAÑANA
@@ -261,7 +268,7 @@ async def check_birthdays():
 
                 await send_reminder_message(channel, member)
                 mark_announced(gdata, user_id, "reminder", tomorrow_key)
-                save_data(data)
+                await save_data(data)
                 log.info("Recordatorio enviado para %s en %s", member, guild.name)
 
 
@@ -278,10 +285,10 @@ async def before_check():
 @app_commands.describe(canal="Canal de texto donde el bot mandará los avisos")
 @app_commands.default_permissions(administrator=True)
 async def slash_set_channel(interaction: discord.Interaction, canal: discord.TextChannel):
-    data = load_data()
+    data = await load_data()
     gdata = get_guild_data(data, interaction.guild.id)
     gdata["channel_id"] = str(canal.id)
-    save_data(data)
+    await save_data(data)
 
     await interaction.response.send_message(
         f"✅ Canal configurado: {canal.mention}",
@@ -310,13 +317,13 @@ async def slash_set_birthday(interaction: discord.Interaction, fecha: str):
     year = parsed.year if parsed.year != 1900 else 2000
     normalized = parsed.replace(year=year).strftime("%d/%m/%Y")
 
-    data = load_data()
+    data = await load_data()
     gdata = get_guild_data(data, interaction.guild.id)
     user_id = str(interaction.user.id)
 
     action = "actualizado 🔄" if user_id in gdata["birthdays"] else "guardado ✅"
     gdata["birthdays"][user_id] = {"date": normalized, "name": str(interaction.user)}
-    save_data(data)
+    await save_data(data)
 
     embed = discord.Embed(
         title="🎂 Cumpleaños guardado",
@@ -329,7 +336,7 @@ async def slash_set_birthday(interaction: discord.Interaction, fecha: str):
 
 @client.tree.command(name="micumple", description="Muestra tu cumpleaños guardado")
 async def slash_my_birthday(interaction: discord.Interaction):
-    data = load_data()
+    data = await load_data()
     gdata = get_guild_data(data, interaction.guild.id)
 
     user_id = str(interaction.user.id)
@@ -351,7 +358,7 @@ async def slash_my_birthday(interaction: discord.Interaction):
 
 @client.tree.command(name="borrarcumple", description="Elimina tu cumpleaños guardado")
 async def slash_delete_birthday(interaction: discord.Interaction):
-    data = load_data()
+    data = await load_data()
     gdata = get_guild_data(data, interaction.guild.id)
     user_id = str(interaction.user.id)
 
@@ -363,7 +370,7 @@ async def slash_delete_birthday(interaction: discord.Interaction):
         return
 
     del gdata["birthdays"][user_id]
-    save_data(data)
+    await save_data(data)
 
     embed = discord.Embed(
         title="🗑️ Cumpleaños eliminado",
@@ -375,7 +382,7 @@ async def slash_delete_birthday(interaction: discord.Interaction):
 
 @client.tree.command(name="cumples", description="Lista todos los cumpleaños del servidor")
 async def slash_list_birthdays(interaction: discord.Interaction):
-    data = load_data()
+    data = await load_data()
     gdata = get_guild_data(data, interaction.guild.id)
     birthdays = gdata.get("birthdays", {})
 
@@ -419,7 +426,7 @@ async def slash_list_birthdays(interaction: discord.Interaction):
     description="Muestra los próximos 5 cumpleaños del servidor",
 )
 async def slash_upcoming(interaction: discord.Interaction):
-    data = load_data()
+    data = await load_data()
     gdata = get_guild_data(data, interaction.guild.id)
     birthdays = gdata.get("birthdays", {})
 
@@ -482,7 +489,7 @@ async def slash_test_birthday(interaction: discord.Interaction):
     now = datetime.now(tz)
     today_md = (now.month, now.day)
 
-    data = load_data()
+    data = await load_data()
     gdata = get_guild_data(data, interaction.guild.id)
     birthdays = gdata.get("birthdays", {})
 
