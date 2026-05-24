@@ -251,42 +251,42 @@ async def check_birthdays():
         tmrw_md = (tomorrow_dt.month, tomorrow_dt.day)
 
         for guild in client.guilds:
-        gdata = get_guild_data(data, guild.id)
-        channel = find_valid_channel(guild, gdata.get("channel_id"))
+            gdata = get_guild_data(data, guild.id)
+            channel = find_valid_channel(guild, gdata.get("channel_id"))
 
-        if not channel:
-            log.warning("No se encontró canal válido en %s", guild.name)
-            continue
-
-        birthdays = gdata.get("birthdays", {})
-
-        for user_id, info in birthdays.items():
-            member = guild.get_member(int(user_id))
-            if not member:
+            if not channel:
+                log.warning("No se encontró canal válido en %s", guild.name)
                 continue
 
-            bday = datetime.strptime(info["date"], "%d/%m/%Y")
-            bday_md = (bday.month, bday.day)
+            birthdays = gdata.get("birthdays", {})
 
-            # HOY
-            if bday_md == today_md:
-                if already_announced(gdata, user_id, "birthday", today_key):
+            for user_id, info in birthdays.items():
+                member = guild.get_member(int(user_id))
+                if not member:
                     continue
 
-                await send_birthday_message(channel, member)
-                mark_announced(gdata, user_id, "birthday", today_key)
-                await save_data(data)
-                log.info("Cumple enviado para %s en %s", member, guild.name)
+                bday = datetime.strptime(info["date"], "%d/%m/%Y")
+                bday_md = (bday.month, bday.day)
 
-            # MAÑANA
-            elif bday_md == tmrw_md:
-                if already_announced(gdata, user_id, "reminder", tomorrow_key):
-                    continue
+                # HOY
+                if bday_md == today_md:
+                    if already_announced(gdata, user_id, "birthday", today_key):
+                        continue
 
-                await send_reminder_message(channel, member)
-                mark_announced(gdata, user_id, "reminder", tomorrow_key)
-                await save_data(data)
-                log.info("Recordatorio enviado para %s en %s", member, guild.name)
+                    await send_birthday_message(channel, member)
+                    mark_announced(gdata, user_id, "birthday", today_key)
+                    await save_data(data)
+                    log.info("Cumple enviado para %s en %s", member, guild.name)
+
+                # MAÑANA
+                elif bday_md == tmrw_md:
+                    if already_announced(gdata, user_id, "reminder", tomorrow_key):
+                        continue
+
+                    await send_reminder_message(channel, member)
+                    mark_announced(gdata, user_id, "reminder", tomorrow_key)
+                    await save_data(data)
+                    log.info("Recordatorio enviado para %s en %s", member, guild.name)
     except Exception as e:
         log.error("check_birthdays falló: %s", e, exc_info=True)
 
