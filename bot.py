@@ -802,6 +802,24 @@ async def slash_cleanup(interaction: discord.Interaction):
 
 # ── Eventos ──────────────────────────────────────────────────────────────────
 @client.event
+async def on_member_remove(member: discord.Member):
+    try:
+        data = await load_data()
+        gdata = get_guild_data(data, member.guild.id)
+        uid = str(member.id)
+        if uid in gdata["birthdays"]:
+            del gdata["birthdays"][uid]
+            await save_data(data)
+            log.info(
+                "Cumpleaños de %s eliminado (salió de %s)",
+                member,
+                member.guild.name,
+            )
+    except Exception as e:
+        log.error("Error en on_member_remove: %s", e, exc_info=True)
+
+
+@client.event
 async def on_ready():
     log.info("Conectado como %s (ID: %s)", client.user, client.user.id)
     log.info("Chequeo diario a las %02d:00 (%s)", CHECK_HOUR, TIMEZONE)
