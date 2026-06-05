@@ -14,7 +14,7 @@ from discord import app_commands
 from discord.ext import tasks
 
 
-# ── Logging ──────────────────────────────────────────────────────────────────
+# ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s: %(message)s",
@@ -22,7 +22,7 @@ logging.basicConfig(
 log = logging.getLogger("birthday-bot")
 
 
-# ── Config ───────────────────────────────────────────────────────────────────
+# ── Config ────────────────────────────────────────────────────────────────────
 TOKEN = os.environ["DISCORD_TOKEN"]
 DATA_FILE = os.environ.get("DATA_FILE", "/data/birthdays.json")
 TIMEZONE = os.environ.get("TIMEZONE", "America/Lima")
@@ -31,15 +31,15 @@ KLIPY_KEY = os.environ.get("KLIPY_API_KEY", "")
 MENTION_EVERYONE = os.environ.get("MENTION_EVERYONE", "true").lower() == "true"
 
 
-# ── Colores ──────────────────────────────────────────────────────────────────
+# ── Colores ───────────────────────────────────────────────────────────────────
 COLOR_BIRTHDAY = discord.Color(0xFF6EB4)  # rosado
 COLOR_REMINDER = discord.Color(0xFFC107)  # amarillo
-COLOR_LIST = discord.Color(0x4CAF50)  # verde
+COLOR_LIST = discord.Color(0x4CAF50)      # verde
 COLOR_UPCOMING = discord.Color(0x2196F3)  # azul
-COLOR_ERROR = discord.Color(0xF44336)  # rojo
+COLOR_ERROR = discord.Color(0xF44336)     # rojo
 
 
-# ── Mensajes aleatorios (Español neutro) ─────────────────────────────────────
+# ── Mensajes aleatorios (Español neutro) ──────────────────────────────────────
 BIRTHDAY_MESSAGES = [
     "🎉 ¡Hoy celebramos el cumpleaños de {usuario}! ¡Que tengas un día increíble! 🎂",
     "🥳 ¡Feliz cumpleaños {usuario}! Que este nuevo año esté lleno de salud y éxitos ✨",
@@ -63,8 +63,13 @@ REMINDER_MESSAGES = [
     "🎁 Mañana es el cumpleaños de {usuario}. ¡Que no se les pase! 🎂",
 ]
 
+NOMBRES_MESES = [
+    "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+]
 
-# ── Discord Client ───────────────────────────────────────────────────────────
+
+# ── Discord Client ────────────────────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.members = True
 
@@ -92,7 +97,7 @@ class BirthdayBot(discord.Client):
 client = BirthdayBot()
 
 
-# ── Persistencia ─────────────────────────────────────────────────────────────
+# ── Persistencia ──────────────────────────────────────────────────────────────
 async def load_data() -> dict:
     if not os.path.exists(DATA_FILE):
         return {}
@@ -101,7 +106,11 @@ async def load_data() -> dict:
 
 
 async def save_data(data: dict):
-    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
+    # FIX: DATA_FILE puede no tener directorio (e.g. "birthdays.json")
+    data_dir = os.path.dirname(DATA_FILE)
+    if data_dir:
+        os.makedirs(data_dir, exist_ok=True)
+
     tmp = DATA_FILE + ".tmp"
     try:
         async with aiofiles.open(tmp, "w", encoding="utf-8") as f:
@@ -131,7 +140,7 @@ def get_guild_data(data: dict, guild_id: int) -> dict:
     return data["guilds"][gid]
 
 
-# ── Anti-spam ────────────────────────────────────────────────────────────────
+# ── Anti-spam ─────────────────────────────────────────────────────────────────
 def already_announced(gdata: dict, user_id: str, kind: str, date_key: str) -> bool:
     key = f"{kind}:{user_id}"
     return gdata.get("last_announcement", {}).get(key) == date_key
@@ -142,7 +151,41 @@ def mark_announced(gdata: dict, user_id: str, kind: str, date_key: str):
     gdata["last_announcement"][key] = date_key
 
 
-# ── Canal válido ─────────────────────────────────────────────────────────────
+def cleanup_announcements(gdata: dict, cutoff_date: str):
+    """Elimina entradas de last_announcement anteriores al cutoff para evitar crecimiento infinito."""
+    la = gdata.get("last_announcement", {})
+    stale = [k for k, v in la.items() if v < cutoff_date]
+    for k in stale:
+        del la[k]
+    if stale:
+        log.info("Limpiados %d registros de anuncios antiguos", len(stale))
+
+
+# ── Parseo de fechas (centralizado) ──────────────────────────────────────────
+def parse_date(fecha: str) -> datetime | None:
+    """Parsea una fecha en formato DD/MM o DD/MM/AAAA. Devuelve None si es inválida."""
+    for fmt in ("%d/%m/%Y", "%d/%m"):
+        try:
+            parsed = datetime.strptime(fecha.strip(), fmt)
+            # strptime con %d/%m devuelve año 1900 → normalizar a 2000
+            if parsed.year == 1900:
+                parsed = parsed.replace(year=2000)
+            return parsed
+        except ValueError:
+            continue
+    return None
+
+
+def normalize_date(parsed: datetime) -> str:
+    """Devuelve la fecha en formato DD/MM/AAAA estándar."""
+    return parsed.strftime("%d/%m/%Y")
+
+
+def is_leap_day(parsed: datetime) -> bool:
+    return parsed.month == 2 and parsed.day == 29
+
+
+# ── Canal válido ──────────────────────────────────────────────────────────────
 def find_valid_channel(guild: discord.Guild, channel_id: str | None):
     if channel_id:
         ch = guild.get_channel(int(channel_id))
@@ -159,7 +202,7 @@ def find_valid_channel(guild: discord.Guild, channel_id: str | None):
     return None
 
 
-# ── KLIPY GIF ────────────────────────────────────────────────────────────────
+# ── KLIPY GIF ─────────────────────────────────────────────────────────────────
 async def fetch_birthday_gif() -> str | None:
     if not KLIPY_KEY:
         return None
@@ -192,7 +235,7 @@ async def fetch_birthday_gif() -> str | None:
         return None
 
 
-# ── Mensajes ────────────────────────────────────────────────────────────────
+# ── Mensajes ──────────────────────────────────────────────────────────────────
 async def send_birthday_message(channel: discord.TextChannel, member: discord.Member):
     gif_url = await fetch_birthday_gif()
     mensaje = random.choice(BIRTHDAY_MESSAGES).format(usuario=member.mention)
@@ -201,7 +244,8 @@ async def send_birthday_message(channel: discord.TextChannel, member: discord.Me
         title="🎂 ¡Feliz cumpleaños!",
         description=mensaje,
         color=COLOR_BIRTHDAY,
-        timestamp=datetime.now(datetime.UTC),
+        # FIX: datetime.UTC no existe → usar dt.timezone.utc
+        timestamp=datetime.now(dt.timezone.utc),
     )
     embed.set_footer(text="🎉 Birthday Bot")
     embed.set_thumbnail(url=member.display_avatar.url)
@@ -220,7 +264,8 @@ async def send_reminder_message(channel: discord.TextChannel, member: discord.Me
         title="🔔 Recordatorio",
         description=mensaje,
         color=COLOR_REMINDER,
-        timestamp=datetime.now(datetime.UTC),
+        # FIX: datetime.UTC no existe → usar dt.timezone.utc
+        timestamp=datetime.now(dt.timezone.utc),
     )
     embed.set_footer(text="📅 Birthday Bot")
     embed.set_thumbnail(url=member.display_avatar.url)
@@ -228,7 +273,28 @@ async def send_reminder_message(channel: discord.TextChannel, member: discord.Me
     await channel.send(embed=embed)
 
 
-# ── Tarea diaria ─────────────────────────────────────────────────────────────
+# ── Días hasta el próximo cumpleaños ─────────────────────────────────────────
+def days_until(date_str: str, now: datetime) -> int:
+    """Calcula cuántos días faltan para el próximo cumpleaños desde `now` (naive o aware)."""
+    bday = datetime.strptime(date_str, "%d/%m/%Y")
+    today = now.date() if hasattr(now, "date") else now
+
+    # Manejo de 29/02: si el año actual no es bisiesto, usar 28/02
+    try:
+        next_bday = bday.replace(year=today.year).date()
+    except ValueError:
+        next_bday = bday.replace(year=today.year, day=28).date()
+
+    if next_bday < today:
+        try:
+            next_bday = bday.replace(year=today.year + 1).date()
+        except ValueError:
+            next_bday = bday.replace(year=today.year + 1, day=28).date()
+
+    return (next_bday - today).days
+
+
+# ── Tarea diaria ──────────────────────────────────────────────────────────────
 @tasks.loop(
     time=dt.time(
         hour=CHECK_HOUR,
@@ -247,11 +313,18 @@ async def check_birthdays():
         tomorrow_dt = now + timedelta(days=1)
         tomorrow_key = tomorrow_dt.strftime("%Y-%m-%d")
 
+        # Fecha de corte: eliminar anuncios de más de 2 días atrás
+        cutoff = (now - timedelta(days=2)).strftime("%Y-%m-%d")
+
         today_md = (now.month, now.day)
         tmrw_md = (tomorrow_dt.month, tomorrow_dt.day)
 
         for guild in client.guilds:
             gdata = get_guild_data(data, guild.id)
+
+            # Limpiar last_announcement periódicamente
+            cleanup_announcements(gdata, cutoff)
+
             channel = find_valid_channel(guild, gdata.get("channel_id"))
 
             if not channel:
@@ -268,8 +341,17 @@ async def check_birthdays():
                 bday = datetime.strptime(info["date"], "%d/%m/%Y")
                 bday_md = (bday.month, bday.day)
 
+                # 29/02: en años no bisiestos tratar como 28/02
+                effective_today_md = today_md
+                effective_tmrw_md = tmrw_md
+                if bday_md == (2, 29):
+                    try:
+                        datetime(now.year, 2, 29)
+                    except ValueError:
+                        bday_md = (2, 28)
+
                 # HOY
-                if bday_md == today_md:
+                if bday_md == effective_today_md:
                     if already_announced(gdata, user_id, "birthday", today_key):
                         continue
 
@@ -279,7 +361,7 @@ async def check_birthdays():
                     log.info("Cumple enviado para %s en %s", member, guild.name)
 
                 # MAÑANA
-                elif bday_md == tmrw_md:
+                elif bday_md == effective_tmrw_md:
                     if already_announced(gdata, user_id, "reminder", tomorrow_key):
                         continue
 
@@ -287,6 +369,7 @@ async def check_birthdays():
                     mark_announced(gdata, user_id, "reminder", tomorrow_key)
                     await save_data(data)
                     log.info("Recordatorio enviado para %s en %s", member, guild.name)
+
     except Exception as e:
         log.error("check_birthdays falló: %s", e, exc_info=True)
 
@@ -301,6 +384,7 @@ async def on_check_error(error: Exception):
     log.error("Error en check_birthdays: %s", error, exc_info=True)
 
 
+# ── Paginador ─────────────────────────────────────────────────────────────────
 class Paginator(discord.ui.View):
     def __init__(self, pages: list[list[str]], color: discord.Color):
         super().__init__(timeout=60)
@@ -337,7 +421,7 @@ class Paginator(discord.ui.View):
         await interaction.response.edit_message(embed=self.make_embed(), view=self)
 
 
-# ── Slash Commands ──────────────────────────────────────────────────────────
+# ── Slash Commands ─────────────────────────────────────────────────────────────
 @client.tree.command(
     name="setcanal",
     description="[Admin] Define el canal donde se anuncian los cumpleaños",
@@ -371,14 +455,8 @@ async def slash_set_birthday(interaction: discord.Interaction, fecha: str):
             ephemeral=True,
         )
         return
-    parsed = None
-    for fmt in ("%d/%m/%Y", "%d/%m"):
-        try:
-            parsed = datetime.strptime(fecha.strip(), fmt)
-            break
-        except ValueError:
-            continue
 
+    parsed = parse_date(fecha)
     if not parsed:
         await interaction.response.send_message(
             "❌ Formato inválido. Usa `DD/MM` o `DD/MM/AAAA`. Ej: `/cumple 15/03`",
@@ -386,9 +464,7 @@ async def slash_set_birthday(interaction: discord.Interaction, fecha: str):
         )
         return
 
-    year = parsed.year if parsed.year != 1900 else 2000
-    normalized = parsed.replace(year=year).strftime("%d/%m/%Y")
-
+    normalized = normalize_date(parsed)
     data = await load_data()
     gdata = get_guild_data(data, interaction.guild.id)
     user_id = str(interaction.user.id)
@@ -397,9 +473,12 @@ async def slash_set_birthday(interaction: discord.Interaction, fecha: str):
     gdata["birthdays"][user_id] = {"date": normalized, "name": str(interaction.user)}
     await save_data(data)
 
+    # Aviso extra si la fecha es 29/02 (bisiesto)
+    leap_note = "\n⚠️ El 29 de febrero solo existe en años bisiestos. En años normales te felicitaremos el 28/02." if is_leap_day(parsed) else ""
+
     embed = discord.Embed(
         title="🎂 Cumpleaños guardado",
-        description=f"{interaction.user.mention}, tu cumpleaños fue {action}:\n📅 **{normalized}**",
+        description=f"{interaction.user.mention}, tu cumpleaños fue {action}:\n📅 **{normalized}**{leap_note}",
         color=COLOR_BIRTHDAY,
     )
 
@@ -536,30 +615,23 @@ async def slash_upcoming(interaction: discord.Interaction):
     tz = pytz.timezone(TIMEZONE)
     now = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
 
-    def days_until(date_str: str) -> int:
-        bday = datetime.strptime(date_str, "%d/%m/%Y")
-        next_bday = bday.replace(year=now.year)
-        if next_bday.date() < now.date():
-            next_bday = next_bday.replace(year=now.year + 1)
-        return (next_bday.date() - now.date()).days
-
     upcoming = sorted(
         birthdays.items(),
-        key=lambda x: days_until(x[1]["date"]),
+        key=lambda x: days_until(x[1]["date"], now),
     )[:5]
 
     lines = []
     for uid, info in upcoming:
         member = interaction.guild.get_member(int(uid))
         name = member.display_name if member else info.get("name", f"Usuario {uid}")
-        days = days_until(info["date"])
+        d = days_until(info["date"], now)
 
-        if days == 0:
+        if d == 0:
             label = "HOY 🎉"
-        elif days == 1:
+        elif d == 1:
             label = "mañana 🔔"
         else:
-            label = f"en {days} días"
+            label = f"en {d} días"
 
         lines.append(f"🎂 **{name}** — {info['date']} (**{label}**)")
 
@@ -618,6 +690,52 @@ async def slash_test_birthday(interaction: discord.Interaction):
 
 
 @client.tree.command(
+    name="testrecordatorio",
+    description="[Admin] Simula el recordatorio de mañana",
+)
+@app_commands.default_permissions(administrator=True)
+async def slash_test_reminder(interaction: discord.Interaction):
+    """Nuevo: permite probar los recordatorios del día siguiente sin esperar."""
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "❌ Este comando solo funciona dentro de un servidor.",
+            ephemeral=True,
+        )
+        return
+    await interaction.response.defer(ephemeral=True)
+
+    tz = pytz.timezone(TIMEZONE)
+    now = datetime.now(tz)
+    tomorrow_dt = now + timedelta(days=1)
+    tmrw_md = (tomorrow_dt.month, tomorrow_dt.day)
+
+    data = await load_data()
+    gdata = get_guild_data(data, interaction.guild.id)
+    birthdays = gdata.get("birthdays", {})
+
+    channel_id = gdata.get("channel_id")
+    channel = interaction.guild.get_channel(int(channel_id)) if channel_id else interaction.channel
+
+    if not channel:
+        await interaction.followup.send("❌ No se encontró un canal válido.", ephemeral=True)
+        return
+
+    found = False
+    for user_id, info in birthdays.items():
+        bday = datetime.strptime(info["date"], "%d/%m/%Y")
+        if (bday.month, bday.day) == tmrw_md:
+            member = interaction.guild.get_member(int(user_id))
+            if member:
+                await send_reminder_message(channel, member)
+                found = True
+
+    await interaction.followup.send(
+        "✅ Test completado. Recordatorio enviado." if found else "📭 No hay cumpleaños mañana.",
+        ephemeral=True,
+    )
+
+
+@client.tree.command(
     name="cumpleadmin",
     description="[Admin] Gestiona el cumpleaños de cualquier miembro",
 )
@@ -664,21 +782,14 @@ async def slash_admin_birthday(
                 ephemeral=True,
             )
             return
-        parsed = None
-        for fmt in ("%d/%m/%Y", "%d/%m"):
-            try:
-                parsed = datetime.strptime(fecha.strip(), fmt)
-                break
-            except ValueError:
-                continue
+        parsed = parse_date(fecha)
         if not parsed:
             await interaction.response.send_message(
                 "❌ Formato inválido. Usa `DD/MM` o `DD/MM/AAAA`.",
                 ephemeral=True,
             )
             return
-        year = parsed.year if parsed.year != 1900 else 2000
-        normalized = parsed.replace(year=year).strftime("%d/%m/%Y")
+        normalized = normalize_date(parsed)
         gdata["birthdays"][uid] = {"date": normalized, "name": str(usuario)}
         await save_data(data)
         await interaction.response.send_message(
@@ -720,23 +831,22 @@ async def slash_stats(interaction: discord.Interaction):
             pass
 
     mes_top_idx = months.index(max(months))
-    nombres_meses = [
-        "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
-        "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
-    ]
-
-    def days_until(date_str: str) -> int:
-        bday = datetime.strptime(date_str, "%d/%m/%Y")
-        next_bday = bday.replace(year=now.year)
-        if next_bday.date() < now.date():
-            next_bday = next_bday.replace(year=now.year + 1)
-        return (next_bday.date() - now.date()).days
-
-    proximo = min(birthdays.items(), key=lambda x: days_until(x[1]["date"]))
+    proximo = min(birthdays.items(), key=lambda x: days_until(x[1]["date"], now))
     proximo_uid, proximo_info = proximo
     proximo_member = interaction.guild.get_member(int(proximo_uid))
     proximo_name = proximo_member.display_name if proximo_member else proximo_info.get("name", "Desconocido")
-    proximo_dias = days_until(proximo_info["date"])
+    proximo_dias = days_until(proximo_info["date"], now)
+
+    # Distribución mensual con barras de texto
+    max_count = max(months) or 1
+    BAR_MAX = 10
+    bar_lines = []
+    for i, count in enumerate(months):
+        filled = round(count / max_count * BAR_MAX)
+        bar = "█" * filled + "░" * (BAR_MAX - filled)
+        mes_short = NOMBRES_MESES[i][:3]
+        marker = " ◀" if i == mes_top_idx else ""
+        bar_lines.append(f"`{mes_short}` {bar} **{count}**{marker}")
 
     embed = discord.Embed(
         title="📊 Estadísticas de cumpleaños",
@@ -745,18 +855,25 @@ async def slash_stats(interaction: discord.Interaction):
     embed.add_field(name="Total registrados", value=f"**{len(birthdays)}** miembros", inline=True)
     embed.add_field(
         name="Mes más popular",
-        value=f"**{nombres_meses[mes_top_idx]}** ({months[mes_top_idx]} cumpleaños)",
+        value=f"**{NOMBRES_MESES[mes_top_idx]}** ({months[mes_top_idx]} cumpleaños)",
         inline=True,
     )
+
     if proximo_dias == 0:
         label = "¡HOY! 🎉"
     elif proximo_dias == 1:
         label = "mañana 🔔"
     else:
         label = f"en {proximo_dias} días"
+
     embed.add_field(
         name="Próximo cumpleaños",
         value=f"**{proximo_name}** — {proximo_info['date']} ({label})",
+        inline=False,
+    )
+    embed.add_field(
+        name="Distribución mensual",
+        value="\n".join(bar_lines),
         inline=False,
     )
     embed.set_footer(text=f"Zona horaria: {TIMEZONE}")
@@ -800,7 +917,7 @@ async def slash_cleanup(interaction: discord.Interaction):
     )
 
 
-# ── Eventos ──────────────────────────────────────────────────────────────────
+# ── Eventos ───────────────────────────────────────────────────────────────────
 @client.event
 async def on_member_remove(member: discord.Member):
     try:
@@ -820,8 +937,14 @@ async def on_member_remove(member: discord.Member):
 
 
 @client.event
+async def on_guild_join(guild: discord.Guild):
+    log.info("Bot añadido al servidor: %s (ID: %s, miembros: %d)", guild.name, guild.id, guild.member_count)
+
+
+@client.event
 async def on_ready():
     log.info("Conectado como %s (ID: %s)", client.user, client.user.id)
+    log.info("Servidores activos: %d", len(client.guilds))
     log.info("Chequeo diario a las %02d:00 (%s)", CHECK_HOUR, TIMEZONE)
     log.info("KLIPY GIFs: %s", "activado" if KLIPY_KEY else "desactivado")
     log.info("Mention everyone: %s", "SI" if MENTION_EVERYONE else "NO")
