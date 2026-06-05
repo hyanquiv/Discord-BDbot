@@ -12,10 +12,11 @@ Bot de Discord para **registrar cumpleaños** y **anunciarlos automáticamente**
 - ✅ Persistencia en JSON con **escritura atómica** (segura contra corrupción)
 - ✅ **I/O asíncrono** con `aiofiles` (sin bloqueos)
 - ✅ **Session HTTP reutilizable** (rendimiento optimizado)
-- ✅ Protección anti-spam (no repite anuncios aunque reinicies)
+- ✅ Protección anti-spam (no repite anuncios aunque reinicies, con limpieza automática)
 - ✅ **Paginación** en `/cumples` (para muchos registros)
 - ✅ **Comandos admin** para gestionar cumpleaños de otros usuarios
 - ✅ **Limpieza automática** cuando miembros salen del servidor
+- ✅ Soporte para fechas **29 de febrero** (con aviso al usuario)
 - ✅ Deploy simple con Docker Compose
 
 ---
@@ -51,11 +52,11 @@ SYNC_COMMANDS=0
 | Variable | Tipo | Descripción |
 |----------|------|-------------|
 | **DISCORD_TOKEN** | string | Token del bot (obligatorio) |
-| **KLIPY_API_KEY** | string | API Key de KLIPY para GIFs (opcional - si está vacío no envía GIFs) |
+| **KLIPY_API_KEY** | string | API Key de KLIPY para GIFs (opcional — si está vacío no envía GIFs) |
 | **TIMEZONE** | string | Zona horaria (ej: `America/Lima`, `Europe/Madrid`, `America/Argentina/Buenos_Aires`) |
 | **CHECK_HOUR** | int | Hora del anuncio diario (0-23) |
-| **MENTION_EVERYONE** | bool | `true/false` - Mencionar @everyone en anuncios |
-| **SYNC_COMMANDS** | int | **`0` por defecto**. Pon a `1` SOLO cuando agregues/cambies slash commands para sincronizar con Discord. Luego vuelve a `0`. |
+| **MENTION_EVERYONE** | bool | `true/false` — Mencionar @everyone en anuncios |
+| **SYNC_COMMANDS** | int | **`0` por defecto**. Pon a `1` SOLO cuando agregues/cambies slash commands. Luego vuelve a `0`. |
 
 **ℹ️ Nota sobre SYNC_COMMANDS:**
 - Discord limita sincronizaciones a 200 por 24h por aplicación
@@ -78,7 +79,7 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-### Ver logs del último contenedor
+### Ver logs recientes
 
 ```bash
 docker compose logs --tail=50
@@ -127,13 +128,39 @@ python bot.py
 
 ---
 
+## 🤖 Comandos disponibles
+
+### Para Usuarios
+
+| Comando | Descripción |
+|---------|-------------|
+| `/cumple <fecha>` | Guardar o actualizar tu cumpleaños. Ej: `/cumple 15/03` o `/cumple 15/03/1990` |
+| `/micumple` | Ver tu cumpleaños guardado |
+| `/borrarcumple` | Eliminar tu cumpleaños |
+| `/cumples` | Listar todos los cumpleaños del servidor (con paginación) |
+| `/proximoscumples` | Ver los 5 próximos cumpleaños |
+
+### Para Administradores
+
+| Comando | Descripción |
+|---------|-------------|
+| `/setcanal <canal>` | Definir el canal donde se anuncian los cumpleaños |
+| `/cumpleadmin <set\|borrar> <usuario> [fecha]` | Gestionar cumpleaños de otros usuarios |
+| `/estadisticas` | Total registrados, mes más popular, próximo cumpleaños y distribución mensual |
+| `/limpiar` | Eliminar cumpleaños de miembros que ya no están en el servidor |
+| `/testcumple` | Simular el anuncio de cumpleaños (solo si hay cumpleaños hoy) |
+| `/testrecordatorio` | Simular el recordatorio de mañana (solo si hay cumpleaños mañana) |
+
+**ℹ️ Nota:** Todos los comandos solo funcionan dentro de un servidor (no en DMs).
+
+---
+
 ## 🔄 Flujo de anuncios
 
-1. **Cada 30 minutos**, el bot verifica si es la hora configurada (`CHECK_HOUR`)
-2. **Exactamente a `CHECK_HOUR:00`** (con precisión de timezone), verifica todos los cumpleaños
-3. **Si es cumpleaños HOY**: Envía anuncio con GIF opcional
-4. **Si es cumpleaños MAÑANA**: Envía recordatorio
-5. **Anti-spam**: Registra las fechas de anuncios para no repetir aunque reinicie
+1. **Exactamente a `CHECK_HOUR:00`** (en la zona horaria configurada), el bot verifica todos los cumpleaños registrados
+2. **Si es cumpleaños HOY**: envía anuncio con GIF opcional y mención a @everyone (si está habilitado)
+3. **Si es cumpleaños MAÑANA**: envía recordatorio
+4. **Anti-spam**: registra la fecha de cada anuncio para no repetir aunque el bot se reinicie; las entradas se limpian automáticamente pasados 2 días
 
 ---
 
@@ -141,23 +168,29 @@ python bot.py
 
 ### Performance & Robustez
 
-- **I/O Asíncrono**: Usa `aiofiles` en lugar de `open()` bloqueante
-- **Session HTTP Reutilizable**: La conexión con la API de KLIPY se mantiene abierta
-- **Escritura Atómica**: Usa archivos `.tmp` para evitar corrupción de datos
-- **Error Handling**: Try/except en todos los puntos críticos
-- **Logging Detallado**: Rastreo de todos los eventos importantes
-- **Guard de DMs**: Rechaza comandos en mensajes directos
+- **I/O Asíncrono**: usa `aiofiles` en lugar de `open()` bloqueante
+- **Session HTTP Reutilizable**: la conexión con la API de KLIPY se mantiene abierta entre peticiones
+- **Escritura Atómica**: usa archivos `.tmp` para evitar corrupción de datos
+- **Error Handling**: try/except en todos los puntos críticos con logging completo
+- **Guard de DMs**: rechaza comandos en mensajes directos
+
+### Fechas especiales
+
+- **29 de febrero**: aceptado y guardado normalmente. En años no bisiestos el anuncio se envía el 28/02. El usuario recibe un aviso al registrar esta fecha.
+- **Limpieza de `last_announcement`**: el registro de anuncios ya enviados se purga automáticamente (entradas con más de 2 días), evitando que el JSON crezca indefinidamente.
 
 ### Arquitectura
 
 ```
 bot.py
-├── Persistencia (load_data/save_data async)
-├── Discord Client + Session HTTP
+├── Configuración (variables de entorno)
+├── Persistencia async (load_data / save_data con escritura atómica)
+├── Helpers (parse_date, days_until, cleanup_announcements)
+├── Discord Client + Session HTTP (aiohttp)
 ├── Tarea diaria con @tasks.loop(time=...)
-├── Handlers de eventos
-├── 10 Slash commands (usuarios + admin)
-└── Paginación automática en /cumples
+├── Handlers de eventos (on_ready, on_member_remove, on_guild_join)
+├── 11 Slash commands (usuarios + admin)
+└── Paginador (View) para /cumples
 ```
 
 ### Dependencias
@@ -173,105 +206,32 @@ aiofiles==23.2.1       # File I/O async
 
 ## ⚙️ Personalización
 
-### Cambiar mensajes
+### Cambiar mensajes de cumpleaños o recordatorios
 
-Edita `BIRTHDAY_MESSAGES` y `REMINDER_MESSAGES` en `bot.py` (líneas 46-68)
+Edita `BIRTHDAY_MESSAGES` y `REMINDER_MESSAGES` en `bot.py`.
 
-### Cambiar colores
+### Cambiar colores de los embeds
 
-Edita las constantes `COLOR_*` en `bot.py` (líneas 41-45)
+Edita las constantes `COLOR_*` al inicio de `bot.py`. Formato: `discord.Color(0xRRGGBB)`.
 
-Formato: `discord.Color(0xRRGGBB)`
+### Cambiar número de próximos cumpleaños en `/proximoscumples`
 
-### Cambiar número de cumpleaños en `/proximoscumples`
-
-En `bot.py` línea ~526, cambia `[:5]` a la cantidad que desees
+Busca `[:5]` en la función `slash_upcoming` y cámbialo al número deseado.
 
 ### Cambiar tamaño de página en `/cumples`
 
-En `bot.py` línea ~500, cambia `PAGE_SIZE = 10` al número deseado
+Busca `PAGE_SIZE = 10` en la función `slash_list_birthdays`.
 
 ---
 
-## 🐛 Troubleshooting
+## 🔑 Permisos necesarios del bot
 
-### El bot no aparece en línea
+En el canal donde envía mensajes:
 
-**Solución:**
-1. Verifica que el token sea correcto en `.env`
-2. Verifica que el bot tiene los permisos correctos en Discord Developer Portal
-3. Revisa los logs: `docker compose logs`
-
-### Los comandos no aparecen
-
-**Solución:**
-1. Pon `SYNC_COMMANDS=1` en `.env`
-2. Reinicia el bot: `docker compose down && docker compose up -d`
-3. Una vez aparezcan, vuelve a `SYNC_COMMANDS=0`
-
-### El anuncio no se envía a la hora exacta
-
-**Solución:**
-1. Verifica que `TIMEZONE` sea correcta (ej: `America/Lima`, no `UTC`)
-2. Verifica que `CHECK_HOUR` sea la hora deseada (0-23)
-3. El bot se sincroniza exactamente a `:00` minutos
-
-### Error "No se encontró canal válido"
-
-**Solución:**
-1. Usa `/setcanal #tu-canal` para definir el canal
-2. Verifica que el bot tenga permisos de `Enviar mensajes` y `Incrustar enlaces`
-
-### Los cumpleaños guardados desaparecen
-
-**Solución:**
-1. Esto ocurre cuando el volumen Docker no persiste
-2. Verifica que el volumen existe: `docker volume ls | grep birthday_data`
-3. Si no existe, reinicia: `docker compose down && docker compose up -d`
-
-### Error de "KLIPY"
-
-**Solución:**
-1. Si no quieres GIFs, deja `KLIPY_API_KEY` vacío en `.env`
-2. Si quieres GIFs, obtén una key gratuita en https://partner.klipy.com
-
----
-
-## 📞 Soporte
-
-Si encuentras bugs o tienes sugerencias:
-- Abre un issue en GitHub
-- Revisa los logs con `docker compose logs`
-
----
-
-## 📄 Licencia
-
----
-
-## 🤖 Comandos disponibles
-
-### Para Usuarios
-
-| Comando | Uso |
-|---------|-----|
-| `/cumple` | Guardar o actualizar tu cumpleaños. Ej: `/cumple 15/03` o `/cumple 15/03/1990` |
-| `/micumple` | Ver tu cumpleaños guardado |
-| `/borrarcumple` | Eliminar tu cumpleaños |
-| `/cumples` | Listar todos los cumpleaños del servidor (con paginación si hay muchos) |
-| `/proximoscumples` | Ver los 5 próximos cumpleaños |
-
-### Para Administradores
-
-| Comando | Uso |
-|---------|-----|
-| `/setcanal` | Definir el canal donde se anuncian los cumpleaños |
-| `/cumpleadmin` | Gestionar cumpleaños de otros usuarios (set/borrar) |
-| `/estadisticas` | Ver estadísticas: total registrados, mes más popular, próximo cumpleaños |
-| `/limpiar` | Eliminar cumpleaños de miembros que ya no están en el servidor |
-| `/testcumple` | Probar el anuncio de cumpleaños (solo si hay cumpleaños hoy) |
-
-**ℹ️ Nota:** Todos los comandos solo funcionan dentro de un servidor (no en DMs).
+- **Send Messages** (obligatorio)
+- **Embed Links** (obligatorio)
+- **Read Message History** (recomendado)
+- **Mention Everyone** (solo si `MENTION_EVERYONE=true`)
 
 ---
 
@@ -283,28 +243,43 @@ Los cumpleaños se guardan en:
 /data/birthdays.json
 ```
 
-En Docker esto está montado en un volumen llamado `birthday_data`. La escritura es **atómica** (segura contra corrupción de datos).
+En Docker este archivo está montado en un volumen llamado `birthday_data`. La escritura es **atómica** (segura contra corrupción).
 
 ---
 
-## 🔑 Permisos necesarios del bot
+## 🐛 Troubleshooting
 
-En el canal donde manda mensajes:
+### El bot no aparece en línea
 
-- **Send Messages** (obligatorio)
-- **Embed Links** (obligatorio)
-- **Read Message History** (recomendado)
-- **Mention Everyone** (solo si `MENTION_EVERYONE=true`)
+1. Verifica que el token sea correcto en `.env`
+2. Verifica que el bot tiene los permisos correctos en el Discord Developer Portal
+3. Revisa los logs: `docker compose logs`
 
----
+### Los comandos no aparecen en Discord
 
-## 🧠 Notas importantes
+1. Pon `SYNC_COMMANDS=1` en `.env`
+2. Reinicia: `docker compose down && docker compose up -d`
+3. Una vez aparezcan los comandos, vuelve a `SYNC_COMMANDS=0`
 
-- **Scheduling preciso**: El bot usa `@tasks.loop(time=...)` para ejecutar exactamente a `CHECK_HOUR:00` en tu timezone
-- **Sistema anti-spam**: No repite anuncios aunque reinicies el bot (guarda la fecha de último anuncio)
-- **Sin bloqueos**: Todas las operaciones de archivo y red son asincrónicas
-- **Seguridad de datos**: La escritura es atómica (usa archivos `.tmp` para evitar corrupción)
-- **Limpiar automáticamente**: Cuando alguien sale del servidor, su cumpleaños se elimina automáticamente
+### El anuncio no se envía a la hora exacta
+
+1. Verifica que `TIMEZONE` sea correcta (ej: `America/Lima`, no `UTC-5`)
+2. Verifica que `CHECK_HOUR` sea la hora deseada (0–23)
+
+### Error "No se encontró canal válido"
+
+1. Usa `/setcanal #tu-canal` para definir el canal manualmente
+2. Verifica que el bot tenga permisos de `Enviar mensajes` y `Incrustar enlaces` en ese canal
+
+### Los cumpleaños guardados desaparecen al reiniciar Docker
+
+1. Verifica que el volumen persiste: `docker volume ls | grep birthday_data`
+2. Si no existe, revisa tu `docker-compose.yml` y que el volumen esté declarado
+
+### No se envían GIFs
+
+1. Si no quieres GIFs, deja `KLIPY_API_KEY` vacío en `.env` — el bot funciona igual sin ellos
+2. Si quieres GIFs, obtén una key gratuita en https://partner.klipy.com
 
 ---
 
